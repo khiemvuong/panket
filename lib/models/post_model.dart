@@ -4,6 +4,7 @@ class PostModel {
   final String senderName;
   final String imageUrl;
   final String audioUrl;
+  final String caption;
   final DateTime timestamp;
 
   PostModel({
@@ -12,6 +13,7 @@ class PostModel {
     required this.senderName,
     required this.imageUrl,
     required this.audioUrl,
+    required this.caption,
     required this.timestamp,
   });
 
@@ -22,6 +24,7 @@ class PostModel {
       'senderName': senderName,
       'imageUrl': imageUrl,
       'audioUrl': audioUrl,
+      'caption': caption,
       'timestamp': timestamp.toIso8601String(),
     };
   }
@@ -33,6 +36,7 @@ class PostModel {
       senderName: map['senderName'] ?? '',
       imageUrl: map['imageUrl'] ?? '',
       audioUrl: map['audioUrl'] ?? '',
+      caption: map['caption'] ?? '',
       timestamp: map['timestamp'] != null
           ? DateTime.tryParse(map['timestamp']) ?? DateTime.now()
           : DateTime.now(),

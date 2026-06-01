@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'dart:js' as js;
+import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:panket/models/post_model.dart';
 import 'package:panket/services/elevenlabs_service.dart';
@@ -27,8 +29,51 @@ class LocketViewModel extends ChangeNotifier {
   bool _isPlaying = false;
   bool get isPlaying => _isPlaying;
 
-  String _elevenLabsApiKey = '';
+  String _elevenLabsApiKey = 'mock';
   String get elevenLabsApiKey => _elevenLabsApiKey;
+
+  String? _selectedFilterUserId;
+  String? get selectedFilterUserId => _selectedFilterUserId;
+
+  final Map<String, Map<String, dynamic>> _userThemes = {
+    'user_1': {
+      'primary': const Color(0xFFF48FB1), // Soft Pink
+      'secondary': const Color(0xFFFFF0F2),
+      'textColor': const Color(0xFFC2185B),
+      'name': 'Hồng phấn',
+    },
+    'user_2': {
+      'primary': const Color(0xFF9FA8DA), // Lavender Blue
+      'secondary': const Color(0xFFEEF0FA),
+      'textColor': const Color(0xFF3F51B5),
+      'name': 'Oải hương',
+    },
+    'user_3': {
+      'primary': const Color(0xFF80CBC4), // Soft Mint
+      'secondary': const Color(0xFFEBF7F6),
+      'textColor': const Color(0xFF00796B),
+      'name': 'Xanh bạc hà',
+    },
+    'user_4': {
+      'primary': const Color(0xFFFFCC80), // Pastel Peach
+      'secondary': const Color(0xFFFFF9F0),
+      'textColor': const Color(0xFFE65100),
+      'name': 'Cam đào',
+    },
+  };
+  Map<String, Map<String, dynamic>> get userThemes => _userThemes;
+
+  String _elevenLabsVoiceId = 'OFHP1Qg30FPoNfkUFFlA'; // Giọng Adam mặc định
+  String get elevenLabsVoiceId => _elevenLabsVoiceId;
+
+  bool _isAudioOptionEnabled = false;
+  bool get isAudioOptionEnabled => _isAudioOptionEnabled;
+
+  String _selectedEmotion = 'Normal';
+  String get selectedEmotion => _selectedEmotion;
+
+  bool _isVoiceGenerated = false;
+  bool get isVoiceGenerated => _isVoiceGenerated;
 
   String? _currentWidgetImage;
   String? get currentWidgetImage => _currentWidgetImage;
@@ -42,6 +87,15 @@ class LocketViewModel extends ChangeNotifier {
   Timer? _playbackTimer;
   int _playbackProgress = 0;
   int get playbackProgress => _playbackProgress;
+
+  bool _isListViewMode = false;
+  bool get isListViewMode => _isListViewMode;
+
+  void setListViewMode(bool value) {
+    _isListViewMode = value;
+    stopAudio(); // Stop audio when toggling view modes
+    notifyListeners();
+  }
 
   // Profile Switcher & Bạn bè (Hỗ trợ mô phỏng realtime nhiều tài khoản)
   final List<Map<String, String>> _users = [
@@ -66,13 +120,91 @@ class LocketViewModel extends ChangeNotifier {
 
   StreamSubscription<List<PostModel>>? _postsSubscription;
 
+  // Chọn nguồn nhạc: 'TTS' (Giọng đọc AI) hoặc 'MUSIC' (Nhạc nền mẫu)
+  String _audioType = 'TTS';
+  String get audioType => _audioType;
+
+  int _selectedMusicIndex = 0;
+  int get selectedMusicIndex => _selectedMusicIndex;
+
+  final List<Map<String, String>> _sampleSongs = [
+    {
+      'name': 'Nhạc Chill 1 🌅',
+      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'
+    },
+    {
+      'name': 'Nhạc Chill 2 🌌',
+      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3'
+    },
+    {
+      'name': 'Nhạc Chill 3 🏝️',
+      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3'
+    },
+  ];
+  List<Map<String, String>> get sampleSongs => _sampleSongs;
+
+  void setSelectedMusicIndex(int index) {
+    _selectedMusicIndex = index;
+    _audioPath = _sampleSongs[index]['url'];
+    _isVoiceGenerated = true; // Nhạc nền sẵn có không cần ElevenLabs tạo
+    stopAudio();
+    notifyListeners();
+  }
+
+  void setAudioType(String type) {
+    _audioType = type;
+    stopAudio();
+    if (type == 'MUSIC') {
+      _audioPath = _sampleSongs[_selectedMusicIndex]['url'];
+      _isVoiceGenerated = true;
+    } else {
+      _audioPath = null;
+      _isVoiceGenerated = false;
+    }
+    notifyListeners();
+  }
+
   LocketViewModel() {
     _loadCurrentWidgetData();
     _initFirebasePostsListener();
+    _initWebAudioListener();
+  }
+
+  void _initWebAudioListener() {
+    if (kIsWeb) {
+      try {
+        js.context['onAudioProgress'] = js.allowInterop((double progress, bool playing) {
+          _playbackProgress = (progress * 100).toInt();
+          _isPlaying = playing;
+          notifyListeners();
+        });
+      } catch (e) {
+        debugPrint('Error binding Web audio listener: $e');
+      }
+    }
   }
 
   void setTextInput(String text) {
+    if (text.length > 100) {
+      text = text.substring(0, 100);
+    }
     _textInput = text;
+    _isVoiceGenerated = false;
+    notifyListeners();
+  }
+
+  void setAudioOptionEnabled(bool enabled) {
+    _isAudioOptionEnabled = enabled;
+    if (!enabled) {
+      _audioPath = null;
+      _isVoiceGenerated = false;
+    }
+    notifyListeners();
+  }
+
+  void setSelectedEmotion(String emotion) {
+    _selectedEmotion = emotion;
+    _isVoiceGenerated = false;
     notifyListeners();
   }
 
@@ -81,9 +213,27 @@ class LocketViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setVoiceId(String id) {
+    _elevenLabsVoiceId = id;
+    _isVoiceGenerated = false; // Yêu cầu tạo lại âm thanh nếu đổi giọng
+    notifyListeners();
+  }
+
   void setSelectedRecipient(String recipientId) {
     _selectedRecipientId = recipientId;
     notifyListeners();
+  }
+
+  void setFilterUserId(String? userId) {
+    _selectedFilterUserId = userId;
+    notifyListeners();
+  }
+
+  List<PostModel> get filteredPosts {
+    if (_selectedFilterUserId == null) {
+      return _postsFeed;
+    }
+    return _postsFeed.where((post) => post.senderId == _selectedFilterUserId).toList();
   }
 
   /// Thay đổi người dùng hiện tại (Profile Switcher) để test gửi/nhận
@@ -167,25 +317,57 @@ class LocketViewModel extends ChangeNotifier {
       return;
     }
     if (_elevenLabsApiKey.trim().isEmpty) {
-      _errorMessage = 'Vui lòng nhập ElevenLabs API Key.';
+      _errorMessage = 'Vui lòng nhập ElevenLabs API Key (hoặc nhập "mock" để dùng âm thanh giả lập).';
       notifyListeners();
       return;
     }
 
     _isGenerating = true;
     _errorMessage = null;
+    _isVoiceGenerated = false;
     notifyListeners();
 
     try {
-      // 1. Sinh các tệp âm thanh nhỏ từ ElevenLabs (tự động phân đoạn bên trong)
-      final chunkPaths = await ElevenLabsService.generateSpeech(
-        text: _textInput,
-        apiKey: _elevenLabsApiKey,
-      );
+      // Nhúng thẻ cảm xúc vào trước văn bản trước khi gửi tới API ElevenLabs
+      String textWithEmotion = _textInput;
+      if (_selectedEmotion == 'Happy') {
+        textWithEmotion = '[laughs] $_textInput';
+      } else if (_selectedEmotion == 'Whisper') {
+        textWithEmotion = '[whispers] $_textInput';
+      } else if (_selectedEmotion == 'Sad') {
+        textWithEmotion = '[sigh] $_textInput';
+      }
+
+      List<String> chunkPaths;
+      if (_elevenLabsApiKey.trim().toLowerCase() == 'mock') {
+        // Tải tệp âm thanh giả lập mẫu
+        final mockUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+        final savedPath = await downloadAndSaveFile(mockUrl, 'mock_audio_${DateTime.now().millisecondsSinceEpoch}.mp3');
+        if (savedPath == null) throw Exception('Không thể tải tệp âm thanh giả lập.');
+        chunkPaths = [savedPath];
+      } else {
+        try {
+          // 1. Sinh các tệp âm thanh nhỏ từ ElevenLabs (tự động phân đoạn bên trong)
+          chunkPaths = await ElevenLabsService.generateSpeech(
+            text: textWithEmotion,
+            apiKey: _elevenLabsApiKey,
+            voiceId: _elevenLabsVoiceId,
+          );
+        } catch (e) {
+          debugPrint('ElevenLabs error: $e. Falling back to Mock Audio.');
+          // Tự động chuyển sang tệp âm thanh giả lập để không chặn tiến trình kiểm thử
+          final mockUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+          final savedPath = await downloadAndSaveFile(mockUrl, 'mock_audio_${DateTime.now().millisecondsSinceEpoch}.mp3');
+          if (savedPath == null) throw Exception('Không thể tải tệp âm thanh giả lập sau khi ElevenLabs lỗi: $e');
+          chunkPaths = [savedPath];
+          _errorMessage = 'ElevenLabs lỗi ($e).\nĐã tự động chuyển sang âm thanh giả lập để bạn tiếp tục test.';
+        }
+      }
 
       // 2. Sử dụng FFmpeg ghép các chunk âm thanh lại thành tệp duy nhất
       final mergedPath = await FFmpegService.concatAudios(chunkPaths);
       _audioPath = mergedPath;
+      _isVoiceGenerated = true;
       
       // Dọn dẹp các tệp chunk nháp (chỉ chạy trên Mobile/Desktop)
       if (!kIsWeb) {
@@ -201,12 +383,32 @@ class LocketViewModel extends ChangeNotifier {
         }
       }
 
+      // Tự động phát thử giọng nói vừa tạo để người dùng nghe review
+      _isPlaying = false;
+      _playbackTimer?.cancel();
+      togglePlaySimulation();
+
     } catch (e) {
       _errorMessage = 'Lỗi tạo giọng nói AI: $e';
     } finally {
       _isGenerating = false;
       notifyListeners();
     }
+  }
+
+  /// Hủy bỏ bài đăng đang chuẩn bị, reset toàn bộ form và quay về màn hình camera chính
+  void cancelPosting() {
+    _imagePath = null;
+    _audioPath = null;
+    _textInput = '';
+    _selectedEmotion = 'Normal';
+    _isVoiceGenerated = false;
+    _isAudioOptionEnabled = false;
+    _errorMessage = null;
+    _isPlaying = false;
+    _playbackTimer?.cancel();
+    _playbackProgress = 0;
+    notifyListeners();
   }
 
   /// Upload hình ảnh và âm thanh lên Firebase, tạo tài liệu Post và chia sẻ
@@ -231,9 +433,9 @@ class LocketViewModel extends ChangeNotifier {
         'image_$postId.jpg',
       );
 
-      // 2. Tải âm thanh lên Storage (nếu có)
+      // 2. Tải âm thanh lên Storage (nếu có và được chọn bật)
       String remoteAudioUrl = '';
-      if (_audioPath != null) {
+      if (_isAudioOptionEnabled && _audioPath != null) {
         remoteAudioUrl = await FirebaseService.uploadMedia(
           _audioPath!,
           'audio_$postId.mp3',
@@ -247,6 +449,7 @@ class LocketViewModel extends ChangeNotifier {
         senderName: currentUserName,
         imageUrl: remoteImageUrl,
         audioUrl: remoteAudioUrl,
+        caption: _textInput,
         timestamp: timestamp,
       );
 
@@ -256,7 +459,13 @@ class LocketViewModel extends ChangeNotifier {
       _imagePath = null;
       _audioPath = null;
       _textInput = '';
+      _selectedEmotion = 'Normal';
+      _isVoiceGenerated = false;
+      _isAudioOptionEnabled = false;
       _errorMessage = null;
+      _isPlaying = false;
+      _playbackTimer?.cancel();
+      _playbackProgress = 0;
 
       // Cập nhật Widget cục bộ của chính mình làm phản hồi trực quan lập tức
       await WidgetService.updateWidgetMedia(
@@ -321,6 +530,82 @@ class LocketViewModel extends ChangeNotifier {
     }
   }
 
+  void stopAudio() {
+    _isPlaying = false;
+    _playbackTimer?.cancel();
+    _playbackProgress = 0;
+    if (kIsWeb) {
+      try {
+        js.context.callMethod('eval', [
+          "if (window.myAudio) { window.myAudio.pause(); window.myAudio.currentTime = 0; }"
+        ]);
+      } catch (e) {
+        debugPrint('Web audio pause error: $e');
+      }
+    }
+    notifyListeners();
+  }
+
+  void startAudioForPost(PostModel post) {
+    if (post.audioUrl.isEmpty) {
+      stopAudio();
+      return;
+    }
+    // Dừng âm thanh cũ nếu đang chạy
+    _isPlaying = false;
+    _playbackTimer?.cancel();
+    _playbackProgress = 0;
+
+    _audioPath = post.audioUrl;
+    _isPlaying = true;
+
+    // Phát âm thanh thật trên Web qua JS với giới hạn 30s
+    if (kIsWeb) {
+      try {
+        js.context.callMethod('eval', [
+          "if (!window.myAudio) window.myAudio = new Audio(); "
+          "if (!window.myAudioListenersSet) { "
+          "  window.myAudio.addEventListener('timeupdate', () => { "
+          "    let maxDuration = 30; "
+          "    let curTime = window.myAudio.currentTime; "
+          "    let duration = Math.min(window.myAudio.duration || maxDuration, maxDuration); "
+          "    if (curTime >= maxDuration) { "
+          "      window.myAudio.pause(); "
+          "      window.myAudio.currentTime = 0; "
+          "      if (window.onAudioProgress) window.onAudioProgress(0.0, false); "
+          "    } else if (window.onAudioProgress) { "
+          "      let progress = curTime / duration; "
+          "      window.onAudioProgress(progress > 1.0 ? 1.0 : progress, !window.myAudio.paused); "
+          "    } "
+          "  }); "
+          "  window.myAudio.addEventListener('ended', () => { "
+          "    if (window.onAudioProgress) window.onAudioProgress(0.0, false); "
+          "  }); "
+          "  window.myAudioListenersSet = true; "
+          "} "
+          "window.myAudio.src = '${post.audioUrl}'; "
+          "window.myAudio.play().catch(e => console.log('Audio autoplay error:', e));"
+        ]);
+      } catch (e) {
+        debugPrint('Web audio play error: $e');
+      }
+    }
+
+    if (!kIsWeb) {
+      // Mock timer chỉ dùng trên Mobile/Desktop để giả lập thanh tiến trình
+      _playbackTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+        _playbackProgress += 5;
+        if (_playbackProgress >= 100) {
+          _isPlaying = false;
+          _playbackProgress = 0;
+          timer.cancel();
+        }
+        notifyListeners();
+      });
+    }
+    notifyListeners();
+  }
+
   /// Phát âm thanh đi kèm của một bài đăng lịch sử
   void playPostAudio(PostModel post) {
     if (post.audioUrl.isEmpty) return;
@@ -331,7 +616,7 @@ class LocketViewModel extends ChangeNotifier {
     togglePlaySimulation();
   }
 
-  /// Mô phỏng phát nhạc cục bộ để kiểm tra trạng thái giao diện UI
+  /// Mô phỏng và phát nhạc thực tế trên Web
   void togglePlaySimulation() {
     if (_audioPath == null) return;
     
@@ -339,18 +624,62 @@ class LocketViewModel extends ChangeNotifier {
       _isPlaying = false;
       _playbackTimer?.cancel();
       _playbackProgress = 0;
+
+      if (kIsWeb) {
+        try {
+          js.context.callMethod('eval', [
+            "if (window.myAudio) window.myAudio.pause();"
+          ]);
+        } catch (e) {
+          debugPrint('Web audio pause error: $e');
+        }
+      }
     } else {
       _isPlaying = true;
       _playbackProgress = 0;
-      _playbackTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
-        _playbackProgress += 5;
-        if (_playbackProgress >= 100) {
-          _isPlaying = false;
-          _playbackProgress = 0;
-          timer.cancel();
+
+      if (kIsWeb) {
+        try {
+          js.context.callMethod('eval', [
+            "if (!window.myAudio) window.myAudio = new Audio(); "
+            "if (!window.myAudioListenersSet) { "
+            "  window.myAudio.addEventListener('timeupdate', () => { "
+            "    let maxDuration = 30; "
+            "    let curTime = window.myAudio.currentTime; "
+            "    let duration = Math.min(window.myAudio.duration || maxDuration, maxDuration); "
+            "    if (curTime >= maxDuration) { "
+            "      window.myAudio.pause(); "
+            "      window.myAudio.currentTime = 0; "
+            "      if (window.onAudioProgress) window.onAudioProgress(0.0, false); "
+            "    } else if (window.onAudioProgress) { "
+            "      let progress = curTime / duration; "
+            "      window.onAudioProgress(progress > 1.0 ? 1.0 : progress, !window.myAudio.paused); "
+            "    } "
+            "  }); "
+            "  window.myAudio.addEventListener('ended', () => { "
+            "    if (window.onAudioProgress) window.onAudioProgress(0.0, false); "
+            "  }); "
+            "  window.myAudioListenersSet = true; "
+            "} "
+            "window.myAudio.src = '$_audioPath'; "
+            "window.myAudio.play().catch(e => console.log('Audio play error:', e));"
+          ]);
+        } catch (e) {
+          debugPrint('Web audio play error: $e');
         }
-        notifyListeners();
-      });
+      }
+
+      if (!kIsWeb) {
+        _playbackTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+          _playbackProgress += 5;
+          if (_playbackProgress >= 100) {
+            _isPlaying = false;
+            _playbackProgress = 0;
+            timer.cancel();
+          }
+          notifyListeners();
+        });
+      }
     }
     notifyListeners();
   }

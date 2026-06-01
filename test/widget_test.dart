@@ -19,12 +19,13 @@ void main() {
     // Verify title exists
     expect(find.text('PANKET'), findsOneWidget);
 
-    // Verify ElevenLabs panel text exists
-    expect(find.text('TẠO GIỌNG NÓI AI (ELEVENLABS)'), findsOneWidget);
+    // Verify camera placeholder text exists
+    expect(find.text('BẤM ĐỂ CHỤP ẢNH'), findsOneWidget);
 
-    // Verify text inputs and buttons exist
-    expect(find.byType(TextField), findsNWidgets(2)); // Key + Speech text fields
-    expect(find.text('SINH GIỌNG NÓI AI'), findsOneWidget);
-    expect(find.text('GIẢ LẬP NHẬN SILENT PUSH'), findsOneWidget);
+    // Verify swipe guidance text exists (TikTok mode default)
+    expect(find.text('VUỐT XUỐNG ĐỂ XEM LOCKET BẠN BÈ'), findsOneWidget);
+
+    // Verify profile switcher label exists
+    expect(find.text('Vai trò:'), findsOneWidget);
   });
 }

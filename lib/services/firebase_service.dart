@@ -8,23 +8,65 @@ import 'package:http/http.dart' as http;
 import 'package:panket/models/post_model.dart';
 
 class FirebaseService {
+  // Đặt true để BẮT BUỘC sử dụng chế độ Giả lập (Simulation Mode).
+  // Đặt false để tự động kết nối với Firebase thực tế.
+  static const bool forceSimulationMode = true;
+
   static bool _isInitialized = false;
-  static bool get isSimulationMode => !_isInitialized;
+  static bool get isSimulationMode => forceSimulationMode || !_isInitialized;
 
   // Cấu trúc dữ liệu giả lập (Simulation Mode Cache)
-  static final List<PostModel> _simulatedPosts = [];
+  static final List<PostModel> _simulatedPosts = [
+    PostModel(
+      id: 'mock_post_1',
+      senderId: 'user_2',
+      senderName: 'John (B)',
+      imageUrl: 'https://picsum.photos/id/101/400/400',
+      audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+      caption: 'Nghe bài hát mới này chill quá mọi người ơi! 🎧',
+      timestamp: DateTime.now().subtract(const Duration(minutes: 10)),
+    ),
+    PostModel(
+      id: 'mock_post_2',
+      senderId: 'user_3',
+      senderName: 'Sarah (C)',
+      imageUrl: 'https://picsum.photos/id/102/400/400',
+      audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
+      caption: 'Hôm nay trời đẹp quá, đi dạo thôi! ☀️',
+      timestamp: DateTime.now().subtract(const Duration(minutes: 30)),
+    ),
+    PostModel(
+      id: 'mock_post_3',
+      senderId: 'user_4',
+      senderName: 'Emily (D)',
+      imageUrl: 'https://picsum.photos/id/103/400/400',
+      audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
+      caption: 'Chill cuối tuần nhè nhẹ 🌸',
+      timestamp: DateTime.now().subtract(const Duration(hours: 2)),
+    ),
+  ];
   static final StreamController<List<PostModel>> _simulatedStreamController =
       StreamController<List<PostModel>>.broadcast();
 
   /// Khởi tạo và kiểm tra kết nối với Firebase thực tế
   static Future<void> initialize() async {
+    if (forceSimulationMode) {
+      _isInitialized = false;
+      debugPrint('Forced Simulation Mode is active.');
+      return;
+    }
+    if (_isInitialized) return;
+
     try {
       if (Firebase.apps.isNotEmpty) {
-        // Thử lấy instance để đảm bảo SDK hoạt động
-        FirebaseFirestore.instance;
-        FirebaseStorage.instance;
+        // Thực hiện một truy vấn nhẹ đến Firestore để kiểm tra kết nối mạng và quyền truy cập thực tế
+        await FirebaseFirestore.instance
+            .collection('posts')
+            .limit(1)
+            .get()
+            .timeout(const Duration(seconds: 3));
         _isInitialized = true;
-        debugPrint('Firebase Real Mode is active.');
+        debugPrint('Firebase Real Mode is active and connected.');
       } else {
         _isInitialized = false;
         debugPrint('Firebase is not initialized. Using Simulation Mode.');
@@ -111,9 +153,9 @@ class FirebaseService {
   }
 
   /// Lắng nghe luồng dữ liệu các bài đăng thời gian thực
-  static Stream<List<PostModel>> listenToPosts() {
-    // Khởi động không đồng bộ kiểm tra Firebase
-    initialize();
+  static Stream<List<PostModel>> listenToPosts() async* {
+    // Đảm bảo đã thực hiện kiểm tra Firebase
+    await initialize();
 
     if (isSimulationMode) {
       // Kích hoạt dữ liệu ban đầu cho listener mới qua Microtask
@@ -122,18 +164,18 @@ class FirebaseService {
           _simulatedStreamController.add(List.from(_simulatedPosts));
         }
       });
-      return _simulatedStreamController.stream;
+      yield* _simulatedStreamController.stream;
+    } else {
+      // Chế độ Thật: Lắng nghe snapshot từ Firestore, sắp xếp theo thời gian mới nhất
+      yield* FirebaseFirestore.instance
+          .collection('posts')
+          .orderBy('timestamp', descending: true)
+          .snapshots()
+          .map((snapshot) {
+        return snapshot.docs.map((doc) {
+          return PostModel.fromMap(doc.data());
+        }).toList();
+      });
     }
-
-    // Chế độ Thật: Lắng nghe snapshot từ Firestore, sắp xếp theo thời gian mới nhất
-    return FirebaseFirestore.instance
-        .collection('posts')
-        .orderBy('timestamp', descending: true)
-        .snapshots()
-        .map((snapshot) {
-      return snapshot.docs.map((doc) {
-        return PostModel.fromMap(doc.data());
-      }).toList();
-    });
   }
 }

@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Panket (Chrome Fixed Port 5555)",
+      "request": "launch",
+      "type": "dart",
+      "args": [
+        "--web-port",
+        "5555"
+      ]
+    }
+  ]
+}
