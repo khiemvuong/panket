@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:panket/viewmodels/locket_viewmodel.dart';
 import 'package:panket/models/post_model.dart';
+import 'package:panket/views/widgets/camera_viewfinder.dart';
 
 class HomeView extends StatelessWidget {
   const HomeView({super.key});
@@ -71,7 +72,7 @@ class HomeView extends StatelessWidget {
                           : CupertinoIcons.list_bullet,
                       color: currentTheme?['textColor'] ?? const Color(0xFF880E4F),
                     ),
-                    tooltip: viewModel.isListViewMode ? 'Chuyển sang xem TikTok' : 'Chuyển sang xem danh sách',
+                    tooltip: viewModel.isListViewMode ? 'Chuyển sang xem Feed' : 'Chuyển sang xem danh sách',
                     onPressed: () => viewModel.setListViewMode(!viewModel.isListViewMode),
                   ),
                 IconButton(
@@ -105,16 +106,52 @@ class HomeView extends StatelessWidget {
 
                   Expanded(
                     child: isEditing
-                        ? SingleChildScrollView(
-                            physics: const BouncingScrollPhysics(),
-                            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
-                            child: _PostEditor(viewModel: viewModel),
+                        ? LayoutBuilder(
+                            builder: (context, constraints) {
+                              return SingleChildScrollView(
+                                physics: const BouncingScrollPhysics(),
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    minHeight: constraints.maxHeight,
+                                  ),
+                                  child: IntrinsicHeight(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
+                                      child: Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          _PostEditor(viewModel: viewModel),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
                           )
                         : (viewModel.isListViewMode
-                            ? SingleChildScrollView(
-                                physics: const BouncingScrollPhysics(),
-                                padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
-                                child: _buildLocketCameraView(context, viewModel),
+                            ? LayoutBuilder(
+                                builder: (context, constraints) {
+                                  return SingleChildScrollView(
+                                    physics: const BouncingScrollPhysics(),
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        minHeight: constraints.maxHeight,
+                                      ),
+                                      child: IntrinsicHeight(
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
+                                          child: Column(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              _buildLocketCameraView(context, viewModel),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
                               )
                             : _buildTikTokFeedView(context, viewModel)),
                   ),
@@ -135,107 +172,20 @@ class HomeView extends StatelessWidget {
     final Color secondaryColor = userTheme?['secondary'] ?? const Color(0xFFFFF0F2);
     final Color textColor = userTheme?['textColor'] ?? const Color(0xFFC2185B);
 
-    // Responsive sizes
-    final screenW = MediaQuery.of(context).size.width;
-    final cameraSize = (screenW * 0.55).clamp(220.0, 380.0);
-    final captureSize = (screenW * 0.15).clamp(60.0, 90.0);
-    final cameraIconSize = (cameraSize * 0.22).clamp(40.0, 80.0);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const SizedBox(height: 10),
         
-        // Vòng tròn Camera Viewfinder Placeholder (màu theo theme người dùng)
-        Center(
-          child: GestureDetector(
-            onTap: () => viewModel.pickImage(ImageSource.camera),
-            child: Container(
-              width: cameraSize,
-              height: cameraSize,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: secondaryColor.withOpacity(0.8),
-                border: Border.all(color: themeColor.withOpacity(0.3), width: 4),
-                boxShadow: [
-                  BoxShadow(
-                    color: themeColor.withOpacity(0.15),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Icon(
-                    CupertinoIcons.camera_fill,
-                    color: themeColor.withOpacity(0.4),
-                    size: cameraIconSize,
-                  ),
-                  Positioned(
-                    bottom: cameraSize * 0.14,
-                    child: Text(
-                      'BẤM ĐỂ CHỤP ẢNH',
-                      style: TextStyle(
-                        color: textColor.withOpacity(0.5),
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+        CameraViewfinder(
+          themeColor: themeColor,
+          textColor: textColor,
+          secondaryColor: secondaryColor,
+          onImageCaptured: (path) => viewModel.setImagePath(path),
+          onGalleryPicked: () => viewModel.pickImage(ImageSource.gallery),
         ),
 
         const SizedBox(height: 24),
-
-        // Hàng nút điều khiển camera
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const SizedBox(width: 48), // Giữ cân bằng
-            
-            // Nút Chụp ảnh chính (Nút tròn theo theme người dùng)
-            GestureDetector(
-              onTap: () => viewModel.pickImage(ImageSource.camera),
-              child: Container(
-                width: captureSize,
-                height: captureSize,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: themeColor,
-                  border: Border.all(color: Colors.white, width: 4),
-                  boxShadow: [
-                    BoxShadow(
-                      color: themeColor.withOpacity(0.4),
-                      blurRadius: 12,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(width: 16),
-            
-            // Nút Chọn ảnh từ Gallery
-            IconButton(
-              onPressed: () => viewModel.pickImage(ImageSource.gallery),
-              icon: const Icon(CupertinoIcons.photo_on_rectangle, size: 28),
-              style: IconButton.styleFrom(
-                backgroundColor: Colors.white.withOpacity(0.8),
-                foregroundColor: textColor,
-                minimumSize: const Size(48, 48),
-                shape: const CircleBorder(),
-              ),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 32),
 
         // Locket Feed của bạn bè & bản thân ( timeline cuộn dọc )
         if (viewModel.isListViewMode) ...[
@@ -467,36 +417,50 @@ class HomeView extends StatelessWidget {
       },
       itemBuilder: (context, index) {
         if (index == 0) {
-          // Trang 0: Camera Viewfinder và các nút
-          return SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
-            child: Column(
-              children: [
-                _buildLocketCameraView(context, viewModel),
-                const SizedBox(height: 24),
-                // Banner Bouncing / Hướng dẫn vuốt xuống
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: const [
-                    Icon(CupertinoIcons.chevron_compact_down, color: Color(0xFF880E4F), size: 24),
-                    SizedBox(width: 8),
-                    Text(
-                      'VUỐT XUỐNG ĐỂ XEM LOCKET BẠN BÈ',
-                      style: TextStyle(
-                        color: Color(0xFF880E4F),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1.0,
+          // Trang 0: Camera Viewfinder và các nút (Căn giữa theo chiều cao)
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight,
+                  ),
+                  child: IntrinsicHeight(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _buildLocketCameraView(context, viewModel),
+                          const SizedBox(height: 24),
+                          // Banner Bouncing / Hướng dẫn vuốt xuống
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              Icon(CupertinoIcons.chevron_compact_down, color: Color(0xFF880E4F), size: 24),
+                              SizedBox(width: 8),
+                              Text(
+                                'VUỐT XUỐNG ĐỂ XEM LOCKET BẠN BÈ',
+                                style: TextStyle(
+                                  color: Color(0xFF880E4F),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                              SizedBox(width: 8),
+                              Icon(CupertinoIcons.chevron_compact_down, color: Color(0xFF880E4F), size: 24),
+                            ],
+                          ),
+                          const SizedBox(height: 32),
+                        ],
                       ),
                     ),
-                    SizedBox(width: 8),
-                    Icon(CupertinoIcons.chevron_compact_down, color: Color(0xFF880E4F), size: 24),
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 32),
-              ],
-            ),
+              );
+            },
           );
         } else {
           // Trang 1..N: Bài viết dạng TikTok (100vh)
@@ -515,7 +479,7 @@ class HomeView extends StatelessWidget {
     int total,
   ) {
     final screenW = MediaQuery.of(context).size.width;
-    final tikTokImgSize = (screenW * 0.6).clamp(200.0, 400.0);
+    final tikTokImgSize = (screenW - 80).clamp(220.0, 420.0);
     final tikTokTapeW = (tikTokImgSize * 0.29).clamp(50.0, 90.0);
     final tikTokTapeH = (tikTokImgSize * 0.075).clamp(14.0, 22.0);
     final senderTheme = viewModel.userThemes[post.senderId];
@@ -668,7 +632,7 @@ class HomeView extends StatelessWidget {
                                 width: tikTokTapeW,
                                 height: tikTokTapeH,
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFF8BBD0).withOpacity(0.85),
+                                  color: themeColor.withOpacity(0.4),
                                   boxShadow: [
                                     BoxShadow(
                                       color: Colors.black.withOpacity(0.05),
@@ -798,6 +762,12 @@ class HomeView extends StatelessWidget {
     final timeAgo = _formatTimestamp(post.timestamp);
     final isPlaying = viewModel.isPlaying && viewModel.audioPath == post.audioUrl;
 
+    // Responsive: dùng LayoutBuilder để lấy constraints thực tế
+    return LayoutBuilder(builder: (context, constraints) {
+    final cardImgSize = (constraints.maxWidth - 32).clamp(220.0, 420.0);
+    final cardTapeW = (cardImgSize * 0.27).clamp(40.0, 80.0);
+    final cardTapeH = (cardImgSize * 0.07).clamp(12.0, 20.0);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
       padding: const EdgeInsets.all(16),
@@ -887,8 +857,8 @@ class HomeView extends StatelessWidget {
               alignment: Alignment.center,
               children: [
                 Container(
-                  width: 220,
-                  height: 220,
+                  width: cardImgSize,
+                  height: cardImgSize,
                   decoration: BoxDecoration(
                     color: secondaryColor,
                     borderRadius: BorderRadius.circular(16),
@@ -905,8 +875,8 @@ class HomeView extends StatelessWidget {
                     borderRadius: BorderRadius.circular(12),
                     child: Image.network(
                       post.imageUrl,
-                      width: 220,
-                      height: 220,
+                      width: cardImgSize,
+                      height: cardImgSize,
                       fit: BoxFit.cover,
                     ),
                   ),
@@ -917,8 +887,8 @@ class HomeView extends StatelessWidget {
                   child: Transform.rotate(
                     angle: -0.08,
                     child: Container(
-                      width: 60,
-                      height: 16,
+                      width: cardTapeW,
+                      height: cardTapeH,
                       decoration: BoxDecoration(
                         color: themeColor.withOpacity(0.3),
                         boxShadow: [
@@ -938,8 +908,8 @@ class HomeView extends StatelessWidget {
                   child: Transform.rotate(
                     angle: 0.1,
                     child: Container(
-                      width: 60,
-                      height: 16,
+                      width: cardTapeW,
+                      height: cardTapeH,
                       decoration: BoxDecoration(
                         color: Color.lerp(themeColor, Colors.white, 0.6)!.withOpacity(0.6),
                         boxShadow: [
@@ -1003,6 +973,7 @@ class HomeView extends StatelessWidget {
         ],
       ),
     );
+    }); // close LayoutBuilder
   }
 
 
@@ -1075,6 +1046,11 @@ class _PostEditorState extends State<_PostEditor> {
     final Color secondaryColor = userTheme?['secondary'] ?? const Color(0xFFFFF0F2);
     final Color textColor = userTheme?['textColor'] ?? const Color(0xFFC2185B);
 
+    final screenW = MediaQuery.of(context).size.width;
+    final editorImgSize = (screenW - 48).clamp(220.0, 420.0);
+    final editorTapeW = (editorImgSize * 0.27).clamp(40.0, 80.0);
+    final editorTapeH = (editorImgSize * 0.07).clamp(12.0, 20.0);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1085,8 +1061,8 @@ class _PostEditorState extends State<_PostEditor> {
             alignment: Alignment.center,
             children: [
               Container(
-                width: 220,
-                height: 220,
+                width: editorImgSize,
+                height: editorImgSize,
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
@@ -1118,10 +1094,10 @@ class _PostEditorState extends State<_PostEditor> {
                 child: Transform.rotate(
                   angle: -0.08,
                   child: Container(
-                    width: 60,
-                    height: 16,
+                    width: editorTapeW,
+                    height: editorTapeH,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF8BBD0).withOpacity(0.85),
+                      color: themeColor.withOpacity(0.4),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withOpacity(0.05),
@@ -1139,8 +1115,8 @@ class _PostEditorState extends State<_PostEditor> {
                 child: Transform.rotate(
                   angle: 0.1,
                   child: Container(
-                    width: 60,
-                    height: 16,
+                    width: editorTapeW,
+                    height: editorTapeH,
                     decoration: BoxDecoration(
                       color: const Color(0xFFB3E5FC).withOpacity(0.85),
                       boxShadow: [

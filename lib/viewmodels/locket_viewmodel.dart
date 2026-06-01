@@ -294,6 +294,13 @@ class LocketViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Đặt đường dẫn ảnh trực tiếp (ví dụ từ camera preview)
+  void setImagePath(String? path) {
+    _imagePath = path;
+    _errorMessage = null;
+    notifyListeners();
+  }
+
   /// Chọn hình ảnh từ Camera hoặc Gallery
   Future<void> pickImage(ImageSource source) async {
     _errorMessage = null;
