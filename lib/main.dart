@@ -50,7 +50,6 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      useInheritedMediaQuery: true, // Cần cho DevicePreview
       locale: DevicePreview.locale(context), // Cần cho DevicePreview
       builder: DevicePreview.appBuilder, // Cần cho DevicePreview
       title: 'Panket',

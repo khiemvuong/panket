@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'dart:js' as js;
+import 'package:panket/services/web_helper.dart' if (dart.library.js) 'package:panket/services/web_helper_web.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:camera/camera.dart';
+import 'package:panket/services/image_processor_service.dart';
 import 'package:panket/models/post_model.dart';
 import 'package:panket/services/elevenlabs_service.dart';
 import 'package:panket/services/ffmpeg_service.dart';
@@ -26,6 +28,11 @@ class LocketViewModel extends ChangeNotifier {
   bool _isGenerating = false;
   bool get isGenerating => _isGenerating;
 
+  bool _isProcessingImage = false;
+  bool get isProcessingImage => _isProcessingImage;
+
+  Completer<String>? _imageProcessingCompleter;
+
   bool _isPlaying = false;
   bool get isPlaying => _isPlaying;
 
@@ -34,6 +41,21 @@ class LocketViewModel extends ChangeNotifier {
 
   String? _selectedFilterUserId;
   String? get selectedFilterUserId => _selectedFilterUserId;
+
+  String _themeMode = 'NỮ'; // 'NỮ' (Female) or 'NAM' (Male)
+  String get themeMode => _themeMode;
+
+  void setThemeMode(String mode) {
+    if (mode == 'NỮ' || mode == 'NAM') {
+      _themeMode = mode;
+      notifyListeners();
+    }
+  }
+
+  void toggleThemeMode() {
+    _themeMode = _themeMode == 'NỮ' ? 'NAM' : 'NỮ';
+    notifyListeners();
+  }
 
   final Map<String, Map<String, dynamic>> _userThemes = {
     'user_1': {
@@ -172,15 +194,11 @@ class LocketViewModel extends ChangeNotifier {
 
   void _initWebAudioListener() {
     if (kIsWeb) {
-      try {
-        js.context['onAudioProgress'] = js.allowInterop((double progress, bool playing) {
-          _playbackProgress = (progress * 100).toInt();
-          _isPlaying = playing;
-          notifyListeners();
-        });
-      } catch (e) {
-        debugPrint('Error binding Web audio listener: $e');
-      }
+      setupWebAudioListener((double progress, bool playing) {
+        _playbackProgress = (progress * 100).toInt();
+        _isPlaying = playing;
+        notifyListeners();
+      });
     }
   }
 
@@ -297,8 +315,44 @@ class LocketViewModel extends ChangeNotifier {
   /// Đặt đường dẫn ảnh trực tiếp (ví dụ từ camera preview)
   void setImagePath(String? path) {
     _imagePath = path;
+    _isProcessingImage = false;
     _errorMessage = null;
     notifyListeners();
+  }
+
+  /// Khởi chạy xử lý hình ảnh bất đồng bộ trong background
+  void startAsynchronousImageProcessing({
+    required String rawPath,
+    required String themeMode,
+    required Color secondaryColor,
+    required double displayZoom,
+    required List<CameraDescription> cameras,
+    required int selectedCameraIndex,
+  }) {
+    _imagePath = rawPath;
+    _isProcessingImage = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    _imageProcessingCompleter = Completer<String>();
+
+    ImageProcessorService.processImage(
+      rawPath: rawPath,
+      themeMode: themeMode,
+      secondaryColor: secondaryColor,
+      displayZoom: displayZoom,
+      cameras: cameras,
+      selectedCameraIndex: selectedCameraIndex,
+    ).then((processedPath) {
+      _imagePath = processedPath;
+      _isProcessingImage = false;
+      _imageProcessingCompleter?.complete(processedPath);
+      notifyListeners();
+    }).catchError((e) {
+      _isProcessingImage = false;
+      _imageProcessingCompleter?.complete(rawPath);
+      notifyListeners();
+    });
   }
 
   /// Chọn hình ảnh từ Camera hoặc Gallery
@@ -308,6 +362,7 @@ class LocketViewModel extends ChangeNotifier {
       final XFile? file = await _picker.pickImage(source: source);
       if (file != null) {
         _imagePath = file.path;
+        _isProcessingImage = false;
         notifyListeners();
       }
     } catch (e) {
@@ -431,6 +486,12 @@ class LocketViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // Nếu đang xử lý ảnh ở background, chờ đợi cho tới khi hoàn tất
+      if (_isProcessingImage && _imageProcessingCompleter != null) {
+        final processedPath = await _imageProcessingCompleter!.future;
+        _imagePath = processedPath;
+      }
+
       final timestamp = DateTime.now();
       final postId = 'post_${timestamp.millisecondsSinceEpoch}';
 
@@ -542,13 +603,7 @@ class LocketViewModel extends ChangeNotifier {
     _playbackTimer?.cancel();
     _playbackProgress = 0;
     if (kIsWeb) {
-      try {
-        js.context.callMethod('eval', [
-          "if (window.myAudio) { window.myAudio.pause(); window.myAudio.currentTime = 0; }"
-        ]);
-      } catch (e) {
-        debugPrint('Web audio pause error: $e');
-      }
+      stopWebAudio();
     }
     notifyListeners();
   }
@@ -568,34 +623,7 @@ class LocketViewModel extends ChangeNotifier {
 
     // Phát âm thanh thật trên Web qua JS với giới hạn 30s
     if (kIsWeb) {
-      try {
-        js.context.callMethod('eval', [
-          "if (!window.myAudio) window.myAudio = new Audio(); "
-          "if (!window.myAudioListenersSet) { "
-          "  window.myAudio.addEventListener('timeupdate', () => { "
-          "    let maxDuration = 30; "
-          "    let curTime = window.myAudio.currentTime; "
-          "    let duration = Math.min(window.myAudio.duration || maxDuration, maxDuration); "
-          "    if (curTime >= maxDuration) { "
-          "      window.myAudio.pause(); "
-          "      window.myAudio.currentTime = 0; "
-          "      if (window.onAudioProgress) window.onAudioProgress(0.0, false); "
-          "    } else if (window.onAudioProgress) { "
-          "      let progress = curTime / duration; "
-          "      window.onAudioProgress(progress > 1.0 ? 1.0 : progress, !window.myAudio.paused); "
-          "    } "
-          "  }); "
-          "  window.myAudio.addEventListener('ended', () => { "
-          "    if (window.onAudioProgress) window.onAudioProgress(0.0, false); "
-          "  }); "
-          "  window.myAudioListenersSet = true; "
-          "} "
-          "window.myAudio.src = '${post.audioUrl}'; "
-          "window.myAudio.play().catch(e => console.log('Audio autoplay error:', e));"
-        ]);
-      } catch (e) {
-        debugPrint('Web audio play error: $e');
-      }
+      playWebAudio(post.audioUrl);
     }
 
     if (!kIsWeb) {
@@ -633,47 +661,14 @@ class LocketViewModel extends ChangeNotifier {
       _playbackProgress = 0;
 
       if (kIsWeb) {
-        try {
-          js.context.callMethod('eval', [
-            "if (window.myAudio) window.myAudio.pause();"
-          ]);
-        } catch (e) {
-          debugPrint('Web audio pause error: $e');
-        }
+        pauseWebAudio();
       }
     } else {
       _isPlaying = true;
       _playbackProgress = 0;
 
       if (kIsWeb) {
-        try {
-          js.context.callMethod('eval', [
-            "if (!window.myAudio) window.myAudio = new Audio(); "
-            "if (!window.myAudioListenersSet) { "
-            "  window.myAudio.addEventListener('timeupdate', () => { "
-            "    let maxDuration = 30; "
-            "    let curTime = window.myAudio.currentTime; "
-            "    let duration = Math.min(window.myAudio.duration || maxDuration, maxDuration); "
-            "    if (curTime >= maxDuration) { "
-            "      window.myAudio.pause(); "
-            "      window.myAudio.currentTime = 0; "
-            "      if (window.onAudioProgress) window.onAudioProgress(0.0, false); "
-            "    } else if (window.onAudioProgress) { "
-            "      let progress = curTime / duration; "
-            "      window.onAudioProgress(progress > 1.0 ? 1.0 : progress, !window.myAudio.paused); "
-            "    } "
-            "  }); "
-            "  window.myAudio.addEventListener('ended', () => { "
-            "    if (window.onAudioProgress) window.onAudioProgress(0.0, false); "
-            "  }); "
-            "  window.myAudioListenersSet = true; "
-            "} "
-            "window.myAudio.src = '$_audioPath'; "
-            "window.myAudio.play().catch(e => console.log('Audio play error:', e));"
-          ]);
-        } catch (e) {
-          debugPrint('Web audio play error: $e');
-        }
+        playWebAudio(_audioPath!);
       }
 
       if (!kIsWeb) {

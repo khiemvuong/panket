@@ -1,5 +1,3 @@
-import 'dart:ui' as ui;
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:camera/camera.dart';
@@ -8,7 +6,8 @@ class CameraViewfinder extends StatefulWidget {
   final Color themeColor;
   final Color textColor;
   final Color secondaryColor;
-  final Function(String) onImageCaptured;
+  final String themeMode;
+  final Function(String rawPath, double zoom, List<CameraDescription> cameras, int selectedCameraIndex) onImageCaptured;
   final VoidCallback onGalleryPicked;
 
   const CameraViewfinder({
@@ -16,6 +15,7 @@ class CameraViewfinder extends StatefulWidget {
     required this.themeColor,
     required this.textColor,
     required this.secondaryColor,
+    required this.themeMode,
     required this.onImageCaptured,
     required this.onGalleryPicked,
   });
@@ -53,7 +53,9 @@ class _CameraViewfinderState extends State<CameraViewfinder> with WidgetsBinding
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _controller?.dispose();
+    final oldController = _controller;
+    _controller = null;
+    oldController?.dispose();
     super.dispose();
   }
 
@@ -67,6 +69,7 @@ class _CameraViewfinderState extends State<CameraViewfinder> with WidgetsBinding
     }
 
     if (state == AppLifecycleState.inactive) {
+      _controller = null;
       cameraController.dispose();
     } else if (state == AppLifecycleState.resumed) {
       _initializeCameraController(cameraController.description);
@@ -115,7 +118,9 @@ class _CameraViewfinderState extends State<CameraViewfinder> with WidgetsBinding
 
   Future<void> _initializeCameraController(CameraDescription cameraDescription) async {
     if (_controller != null) {
-      await _controller!.dispose();
+      final oldController = _controller;
+      _controller = null;
+      await oldController!.dispose();
     }
 
     // Medium resolution is stable, bandwidth-friendly (~720x480)
@@ -248,75 +253,6 @@ class _CameraViewfinderState extends State<CameraViewfinder> with WidgetsBinding
     }
   }
 
-  Future<String> _processCapturedImage(XFile file) async {
-    try {
-      final Uint8List bytes = await file.readAsBytes();
-
-      final ui.Codec codec = await ui.instantiateImageCodec(bytes);
-      final ui.FrameInfo frameInfo = await codec.getNextFrame();
-      final ui.Image image = frameInfo.image;
-
-      final double width = image.width.toDouble();
-      final double height = image.height.toDouble();
-      final double minDim = width < height ? width : height;
-
-      final double outputSize = 1080;
-      final ui.PictureRecorder recorder = ui.PictureRecorder();
-      final ui.Canvas canvas = ui.Canvas(recorder);
-
-      final ui.Paint bgPaint = ui.Paint()..color = widget.secondaryColor;
-      canvas.drawRect(ui.Rect.fromLTWH(0, 0, outputSize, outputSize), bgPaint);
-
-      // Check if we are using the physical wide angle lens
-      final rearCameras = _cameras.where((c) => c.lensDirection == CameraLensDirection.back).toList();
-      final bool isUsingPhysicalWideAngle = rearCameras.length > 1 && 
-          _selectedCameraIndex < _cameras.length &&
-          _cameras[_selectedCameraIndex].name == rearCameras[1].name;
-
-      final double targetZoom = isUsingPhysicalWideAngle ? 1.0 : _displayZoom;
-
-      if (targetZoom >= 1.0) {
-        final double cropSize = minDim / targetZoom;
-        final double sx = (width - cropSize) / 2;
-        final double sy = (height - cropSize) / 2;
-
-        canvas.drawImageRect(
-          image,
-          ui.Rect.fromLTWH(sx, sy, cropSize, cropSize),
-          ui.Rect.fromLTWH(0, 0, outputSize, outputSize),
-          ui.Paint()..filterQuality = ui.FilterQuality.high,
-        );
-      } else {
-        // targetZoom < 1.0 (visual scale down wide-angle)
-        final double sx = (width - minDim) / 2;
-        final double sy = (height - minDim) / 2;
-
-        final double destSize = outputSize * targetZoom;
-        final double destOffset = (outputSize - destSize) / 2;
-
-        canvas.drawImageRect(
-          image,
-          ui.Rect.fromLTWH(sx, sy, minDim, minDim),
-          ui.Rect.fromLTWH(destOffset, destOffset, destSize, destSize),
-          ui.Paint()..filterQuality = ui.FilterQuality.high,
-        );
-      }
-
-      final ui.Picture picture = recorder.endRecording();
-      final ui.Image croppedImage = await picture.toImage(outputSize.toInt(), outputSize.toInt());
-
-      final ByteData? byteData = await croppedImage.toByteData(format: ui.ImageByteFormat.png);
-      if (byteData == null) throw Exception("Failed to encode cropped image");
-      final Uint8List croppedBytes = byteData.buffer.asUint8List();
-
-      final XFile croppedXFile = XFile.fromData(croppedBytes, mimeType: 'image/png');
-      return croppedXFile.path;
-    } catch (e) {
-      debugPrint("Image processing error: $e");
-      return file.path;
-    }
-  }
-
   Future<void> _takePicture() async {
     if (_controller == null || !_controller!.value.isInitialized || _isCapturing) return;
 
@@ -326,9 +262,7 @@ class _CameraViewfinderState extends State<CameraViewfinder> with WidgetsBinding
 
     try {
       final XFile file = await _controller!.takePicture();
-      // Process picture to make it square 1:1 and apply zoom levels
-      final String processedPath = await _processCapturedImage(file);
-      widget.onImageCaptured(processedPath);
+      widget.onImageCaptured(file.path, _displayZoom, _cameras, _selectedCameraIndex);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -358,42 +292,84 @@ class _CameraViewfinderState extends State<CameraViewfinder> with WidgetsBinding
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
+    final isNam = widget.themeMode == 'NAM';
 
     // Viewfinder size responsive: hiển thị hết chiều ngang (trừ padding nhẹ 16px mỗi bên)
     final screenW = MediaQuery.of(context).size.width;
     final viewfinderSize = (screenW - 32).clamp(220.0, 420.0);
 
+    final rearCameras = _cameras.where((c) => c.lensDirection == CameraLensDirection.back).toList();
+    final bool isUsingPhysicalWideAngle = rearCameras.length > 1 && 
+        _selectedCameraIndex < _cameras.length &&
+        _cameras[_selectedCameraIndex].name == rearCameras[1].name;
+
+    final double visualScale = isUsingPhysicalWideAngle
+        ? 1.0
+        : ((_maxZoom > _minZoom && _displayZoom >= 1.0) ? 1.0 : _displayZoom);
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Technical Metadata Top (Only for NAM style)
+        if (isNam) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                const Row(
+                  children: [
+                    Text("ISO 400", style: TextStyle(fontFamily: 'monospace', fontSize: 10, color: Color(0xFF8E9192), letterSpacing: 1.0)),
+                    SizedBox(width: 12),
+                    Text("1/125S", style: TextStyle(fontFamily: 'monospace', fontSize: 10, color: Color(0xFF8E9192), letterSpacing: 1.0)),
+                    SizedBox(width: 12),
+                    Text("F/2.8", style: TextStyle(fontFamily: 'monospace', fontSize: 10, color: Color(0xFF8E9192), letterSpacing: 1.0)),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Text("AF-S", style: TextStyle(fontFamily: 'monospace', fontSize: 10, color: Color(0xFFFFB300), fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+                    const SizedBox(width: 6),
+                    Container(width: 4, height: 12, color: const Color(0xFFFFB300)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+        ],
+
         // Camera Viewfinder Box (Square crop)
         Center(
           child: Container(
             width: viewfinderSize,
             height: viewfinderSize,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: widget.themeColor.withOpacity(0.4), width: 4),
+              borderRadius: BorderRadius.circular(isNam ? 0 : 24),
+              border: isNam
+                  ? Border.all(color: const Color(0xFF353434), width: 12)
+                  : Border.all(color: widget.themeColor.withValues(alpha: 0.4), width: 4),
               boxShadow: [
                 BoxShadow(
-                  color: widget.themeColor.withOpacity(0.15),
+                  color: isNam ? Colors.black.withValues(alpha: 0.5) : widget.themeColor.withValues(alpha: 0.15),
                   blurRadius: 20,
                   offset: const Offset(0, 10),
                 ),
               ],
             ),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(isNam ? 0 : 20),
               child: _isInitializing
                   ? Container(
-                      color: widget.secondaryColor.withOpacity(0.8),
+                      color: widget.secondaryColor.withValues(alpha: 0.8),
                       child: Center(
-                        child: CircularProgressIndicator(color: widget.themeColor),
+                        child: CircularProgressIndicator(color: isNam ? const Color(0xFFFFB300) : widget.themeColor),
                       ),
                     )
                   : _initError != null
                       ? Container(
-                          color: widget.secondaryColor.withOpacity(0.8),
+                          color: widget.secondaryColor.withValues(alpha: 0.8),
                           padding: const EdgeInsets.all(16),
                           child: Center(
                             child: Text(
@@ -407,63 +383,98 @@ class _CameraViewfinderState extends State<CameraViewfinder> with WidgetsBinding
                           ? Stack(
                               fit: StackFit.expand,
                               children: [
-                                LayoutBuilder(
-                                  builder: (context, constraints) {
-                                     final rearCameras = _cameras.where((c) => c.lensDirection == CameraLensDirection.back).toList();
-                                     final bool isUsingPhysicalWideAngle = rearCameras.length > 1 && 
-                                         _selectedCameraIndex < _cameras.length &&
-                                         _cameras[_selectedCameraIndex].name == rearCameras[1].name;
-
-                                     final double visualScale = isUsingPhysicalWideAngle
-                                         ? 1.0
-                                         : ((_maxZoom > _minZoom && _displayZoom >= 1.0) ? 1.0 : _displayZoom);
-
-                                    return ClipRect(
-                                      child: OverflowBox(
-                                        alignment: Alignment.center,
-                                        child: FittedBox(
-                                          fit: BoxFit.cover,
-                                          child: SizedBox(
-                                            width: constraints.maxWidth,
-                                            height: constraints.maxWidth / controller.value.aspectRatio,
-                                            child: GestureDetector(
-                                              onScaleStart: (details) {
-                                                _baseZoom = _displayZoom;
-                                              },
-                                              onScaleUpdate: (details) {
-                                                _updateZoom(_baseZoom * details.scale);
-                                              },
-                                              child: Transform.scale(
-                                                scale: visualScale,
-                                                child: CameraPreview(controller),
-                                              ),
-                                            ),
+                                ClipRect(
+                                  child: OverflowBox(
+                                    alignment: Alignment.center,
+                                    child: FittedBox(
+                                      fit: BoxFit.cover,
+                                      child: SizedBox(
+                                        width: viewfinderSize,
+                                        height: viewfinderSize / controller.value.aspectRatio,
+                                        child: GestureDetector(
+                                          onScaleStart: (details) {
+                                            _baseZoom = _displayZoom;
+                                          },
+                                          onScaleUpdate: (details) {
+                                            _updateZoom(_baseZoom * details.scale);
+                                          },
+                                          child: Transform.scale(
+                                            scale: visualScale,
+                                            child: isNam
+                                                ? ColorFiltered(
+                                                    colorFilter: const ColorFilter.matrix(<double>[
+                                                      0.2126, 0.7152, 0.0722, 0, 0,
+                                                      0.2126, 0.7152, 0.0722, 0, 0,
+                                                      0.2126, 0.7152, 0.0722, 0, 0,
+                                                      0,      0,      0,      1, 0,
+                                                    ]),
+                                                    child: CameraPreview(controller),
+                                                  )
+                                                : CameraPreview(controller),
                                           ),
                                         ),
                                       ),
-                                    );
-                                  },
-                                ),
-                                
-                                // 2. Zoom Level Badge
-                                Positioned(
-                                  bottom: 12,
-                                  right: 12,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: Colors.black.withOpacity(0.5),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Text(
-                                      "${_displayZoom.toStringAsFixed(1)}x",
-                                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                                     ),
                                   ),
                                 ),
+                                
+                                // Zoom Level Badge (Tappable to toggle zoom in Nữ mode)
+                                 if (!isNam)
+                                   Positioned(
+                                     bottom: 12,
+                                     right: 12,
+                                     child: GestureDetector(
+                                       onTap: () {
+                                         final target = _displayZoom < 1.75 ? 2.5 : 1.0;
+                                         _updateZoom(target);
+                                       },
+                                       child: Container(
+                                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                         decoration: BoxDecoration(
+                                           color: Colors.black.withValues(alpha: 0.5),
+                                           borderRadius: BorderRadius.circular(12),
+                                         ),
+                                         child: Text(
+                                           "${_displayZoom.toStringAsFixed(1)}x",
+                                           style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                                         ),
+                                       ),
+                                     ),
+                                   ),
+
+                                 // Glowing Technical Zoom Stamp (Tappable to toggle zoom in Nam mode)
+                                 if (isNam)
+                                   Positioned(
+                                     bottom: 12,
+                                     right: 12,
+                                     child: GestureDetector(
+                                       onTap: () {
+                                         final target = _displayZoom < 1.75 ? 2.5 : 1.0;
+                                         _updateZoom(target);
+                                       },
+                                       child: Container(
+                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                         decoration: BoxDecoration(
+                                           color: Colors.black.withValues(alpha: 0.6),
+                                           borderRadius: BorderRadius.circular(4),
+                                           border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.3), width: 0.8),
+                                         ),
+                                         child: Text(
+                                           "${_displayZoom.toStringAsFixed(1)}x",
+                                           style: const TextStyle(
+                                             color: Color(0xFFFFB300),
+                                             fontSize: 9,
+                                             fontWeight: FontWeight.bold,
+                                             fontFamily: 'monospace',
+                                             letterSpacing: 0.5,
+                                           ),
+                                         ),
+                                       ),
+                                     ),
+                                   ),
                                   
-                                // 3. Overlay Flash button on Top-Right corner (Premium layout)
-                                if (_isFlashSupported)
+                                // Overlay Flash button on Top-Right corner
+                                if (_isFlashSupported && !isNam)
                                   Positioned(
                                     top: 12,
                                     right: 12,
@@ -473,7 +484,7 @@ class _CameraViewfinderState extends State<CameraViewfinder> with WidgetsBinding
                                         width: 38,
                                         height: 38,
                                         decoration: BoxDecoration(
-                                          color: Colors.black.withOpacity(0.4),
+                                          color: Colors.black.withValues(alpha: 0.4),
                                           shape: BoxShape.circle,
                                         ),
                                         child: Icon(
@@ -484,117 +495,279 @@ class _CameraViewfinderState extends State<CameraViewfinder> with WidgetsBinding
                                       ),
                                     ),
                                   ),
+
+                                // Technical Overlays for NAM mode
+                                if (isNam) ...[
+                                  // 1. Focus Brackets
+                                  Positioned(
+                                    top: 12, left: 12,
+                                    child: Container(width: 16, height: 16, decoration: const BoxDecoration(border: Border(top: BorderSide(color: Colors.white38, width: 2), left: BorderSide(color: Colors.white38, width: 2)))),
+                                  ),
+                                  Positioned(
+                                    top: 12, right: 12,
+                                    child: Container(width: 16, height: 16, decoration: const BoxDecoration(border: Border(top: BorderSide(color: Colors.white38, width: 2), right: BorderSide(color: Colors.white38, width: 2)))),
+                                  ),
+                                  Positioned(
+                                    bottom: 12, left: 12,
+                                    child: Container(width: 16, height: 16, decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Colors.white38, width: 2), left: BorderSide(color: Colors.white38, width: 2)))),
+                                  ),
+                                  Positioned(
+                                    bottom: 12, right: 12,
+                                    child: Container(width: 16, height: 16, decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Colors.white38, width: 2), right: BorderSide(color: Colors.white38, width: 2)))),
+                                  ),
+
+                                  // 2. Center Crosshair
+                                  Center(
+                                    child: Stack(
+                                      alignment: Alignment.center,
+                                      children: [
+                                        Container(width: 24, height: 1, color: const Color(0xFFFFB300).withValues(alpha: 0.5)),
+                                        Container(width: 1, height: 24, color: const Color(0xFFFFB300).withValues(alpha: 0.5)),
+                                        Container(
+                                          width: 8,
+                                          height: 8,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.4), width: 1),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+
+                                  // 3. Zoom list labels on Left (Tappable to set specific zoom level directly)
+                                   Positioned(
+                                     left: 12,
+                                     top: 0,
+                                     bottom: 0,
+                                     child: Column(
+                                       mainAxisAlignment: MainAxisAlignment.center,
+                                       children: [2.5, 1.0].map((z) {
+                                         final bool isActive = (_displayZoom - z).abs() < 0.15;
+                                         return Padding(
+                                           padding: const EdgeInsets.symmetric(vertical: 10.0),
+                                           child: GestureDetector(
+                                             onTap: () => _updateZoom(z),
+                                             behavior: HitTestBehavior.opaque,
+                                             child: Text(
+                                               "${z.toStringAsFixed(1)}x",
+                                               style: TextStyle(
+                                                 fontFamily: 'monospace',
+                                                 fontSize: 10,
+                                                 fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+                                                 color: isActive ? const Color(0xFFFFB300) : Colors.white38,
+                                                 shadows: isActive ? [
+                                                   const Shadow(
+                                                     color: Color(0xFFFFB300),
+                                                     blurRadius: 8,
+                                                   ),
+                                                 ] : null,
+                                               ),
+                                             ),
+                                           ),
+                                         );
+                                       }).toList(),
+                                     ),
+                                   ),
+
+                                  // 4. Zoom slider side indicators (Flash in metal, camera flip removed)
+                                   if (_isFlashSupported)
+                                     Positioned(
+                                       right: 12,
+                                       top: 0,
+                                       bottom: 0,
+                                       child: Center(
+                                         child: GestureDetector(
+                                           onTap: _toggleFlash,
+                                           child: Container(
+                                             width: 34,
+                                             height: 34,
+                                             decoration: BoxDecoration(
+                                               shape: BoxShape.circle,
+                                               gradient: const LinearGradient(
+                                                 colors: [Color(0xFF474646), Color(0xFF1C1B1B)],
+                                                 begin: Alignment.topCenter,
+                                                 end: Alignment.bottomCenter,
+                                               ),
+                                               border: Border.all(color: Colors.white10),
+                                               boxShadow: [
+                                                 BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 4, offset: const Offset(0, 2)),
+                                               ],
+                                             ),
+                                             child: Icon(
+                                               _getFlashIcon(),
+                                               color: Colors.white70,
+                                               size: 16,
+                                             ),
+                                           ),
+                                         ),
+                                       ),
+                                     ),
+                                ],
                               ],
                             )
                           : Container(
-                              color: widget.secondaryColor.withOpacity(0.8),
+                              color: widget.secondaryColor.withValues(alpha: 0.8),
                               child: const Center(child: Text("Không có tín hiệu camera")),
                             ),
             ),
           ),
         ),
 
-        const SizedBox(height: 12),
-
-        // Zoom Slider Row (Always available for virtual and hardware zoom)
-        if (controller != null && controller.value.isInitialized)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 32.0),
+        // Technical Metadata Bottom (Only for NAM style)
+        if (isNam) ...[
+          const SizedBox(height: 4),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16.0),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Icon(CupertinoIcons.minus_circle, size: 16, color: widget.textColor.withOpacity(0.6)),
-                Expanded(
-                  child: SliderTheme(
-                    data: SliderThemeData(
-                      activeTrackColor: widget.themeColor,
-                      inactiveTrackColor: widget.themeColor.withOpacity(0.2),
-                      thumbColor: widget.themeColor,
-                      overlayColor: widget.themeColor.withOpacity(0.12),
-                      trackHeight: 2.5,
-                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
-                    ),
-                    child: Slider(
-                      value: _displayZoom,
-                      min: 0.5,
-                      max: 2.5,
-                      onChanged: (value) => _updateZoom(value),
-                    ),
-                  ),
-                ),
-                Icon(CupertinoIcons.plus_circle, size: 16, color: widget.textColor.withOpacity(0.6)),
+                Text("PAN-KT 35MM SYSTEM", style: TextStyle(fontFamily: 'monospace', fontSize: 10, color: Color(0xFF444748), letterSpacing: 0.5)),
+                Text("NO. 000492-B", style: TextStyle(fontFamily: 'monospace', fontSize: 10, color: Color(0xFF444748), letterSpacing: 0.5)),
               ],
             ),
           ),
+        ],
+
+        const SizedBox(height: 16),
+
+        // Zoom sliders removed to simplify Mobile camera control and keep the interface exceptionally clean.
 
         const SizedBox(height: 12),
 
         // Camera control buttons (Gallery, Capture, Flip)
+        // Camera control buttons (Gallery, Capture, Flip) - DRY unified layout
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Gallery Picker Button
-            IconButton(
-              onPressed: widget.onGalleryPicked,
-              icon: const Icon(CupertinoIcons.photo_on_rectangle, size: 24),
-              style: IconButton.styleFrom(
-                backgroundColor: Colors.white.withOpacity(0.8),
-                foregroundColor: widget.textColor,
-                minimumSize: const Size(46, 46),
-                shape: const CircleBorder(),
-                elevation: 1,
-              ),
-              tooltip: "Chọn từ Thư viện",
-            ),
-            
-            const SizedBox(width: 32),
-
-            // Capture button
+            // 1. Gallery Button
             GestureDetector(
-              onTap: _isCapturing ? null : _takePicture,
+              onTap: widget.onGalleryPicked,
               child: Container(
-                width: (screenW * 0.15).clamp(60.0, 90.0),
-                height: (screenW * 0.15).clamp(60.0, 90.0),
+                width: 46,
+                height: 46,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: widget.themeColor,
-                  border: Border.all(color: Colors.white, width: 4),
+                  color: isNam ? null : Colors.white.withValues(alpha: 0.8),
+                  gradient: isNam
+                      ? const LinearGradient(
+                          colors: [Color(0xFF474646), Color(0xFF1C1B1B)],
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                        )
+                      : null,
+                  border: isNam ? Border.all(color: Colors.white10) : null,
                   boxShadow: [
                     BoxShadow(
-                      color: widget.themeColor.withOpacity(0.4),
-                      blurRadius: 12,
-                      spreadRadius: 2,
+                      color: Colors.black.withValues(alpha: isNam ? 0.3 : 0.08),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
                     ),
                   ],
                 ),
-                child: _isCapturing
-                    ? const Center(
-                        child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 3,
-                        ),
-                      )
-                    : null,
+                child: Icon(
+                  CupertinoIcons.photo_on_rectangle,
+                  color: isNam ? Colors.white70 : widget.textColor,
+                  size: 20,
+                ),
               ),
             ),
             
-            const SizedBox(width: 32),
+            const SizedBox(width: 36),
 
-            // Flip Camera button
-            Opacity(
-              opacity: _cameras.length >= 2 ? 1.0 : 0.5,
-              child: IconButton(
-                onPressed: _cameras.length >= 2 ? _toggleCamera : null,
-                icon: const Icon(CupertinoIcons.switch_camera, size: 24),
-                style: IconButton.styleFrom(
-                  backgroundColor: Colors.white.withOpacity(0.8),
-                  foregroundColor: widget.textColor,
-                  minimumSize: const Size(46, 46),
-                  shape: const CircleBorder(),
-                  elevation: 1,
+            // 2. Shutter (Capture) Button
+            GestureDetector(
+              onTap: _isCapturing ? null : _takePicture,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Outer breathing/glowing ring
+                  Container(
+                    width: 88,
+                    height: 88,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: (isNam ? const Color(0xFFFFB300) : widget.themeColor).withValues(alpha: 0.2),
+                        width: 1.5,
+                      ),
+                    ),
+                  ),
+                  // Inner Technical or Cute Shutter
+                  Container(
+                    width: 76,
+                    height: 76,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: isNam
+                          ? const LinearGradient(
+                              colors: [Color(0xFF474646), Color(0xFF1C1B1B)],
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                            )
+                          : null,
+                      color: isNam ? null : widget.themeColor,
+                      border: Border.all(
+                        color: isNam ? const Color(0xFF353434) : Colors.white,
+                        width: isNam ? 3.0 : 4.0,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: (isNam ? const Color(0xFFFFB300) : widget.themeColor).withValues(alpha: 0.35),
+                          blurRadius: 16,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: _isCapturing
+                          ? CircularProgressIndicator(
+                              color: isNam ? const Color(0xFFFFB300) : Colors.white,
+                              strokeWidth: 3,
+                            )
+                          : Icon(
+                              isNam ? CupertinoIcons.camera_fill : CupertinoIcons.camera,
+                              color: isNam ? Colors.white70 : Colors.white,
+                              size: 22,
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            const SizedBox(width: 36),
+
+            // 3. Switch Camera Button
+            GestureDetector(
+              onTap: _cameras.length >= 2 ? _toggleCamera : null,
+              child: Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isNam ? null : Colors.white.withValues(alpha: 0.8),
+                  gradient: isNam
+                      ? const LinearGradient(
+                          colors: [Color(0xFF474646), Color(0xFF1C1B1B)],
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                        )
+                      : null,
+                  border: isNam ? Border.all(color: Colors.white10) : null,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: isNam ? 0.3 : 0.08),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
-                tooltip: "Đổi Camera",
+                child: Icon(
+                  CupertinoIcons.switch_camera,
+                  color: isNam ? Colors.white70 : widget.textColor,
+                  size: 20,
+                ),
               ),
             ),
           ],
